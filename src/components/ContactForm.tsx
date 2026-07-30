@@ -11,6 +11,7 @@ import {
   User,
 } from "lucide-react";
 import { FormEvent, useState } from "react";
+import { trackLeadFormSubmission } from "@/lib/analytics";
 
 type FormStatus = "idle" | "sending" | "success" | "error";
 
@@ -61,6 +62,7 @@ export default function ContactForm() {
       }
 
       setStatus("success");
+      trackLeadFormSubmission();
       form.reset();
     } catch (error) {
       setStatus("error");
