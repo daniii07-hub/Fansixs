@@ -5,6 +5,10 @@ import type {
 } from "../routing";
 
 import type {
+  PlannerEventWithDate,
+} from "../../planner/queries";
+
+import type {
   DispatcherAnalysis,
   DispatcherMoveCandidate,
   DispatcherMoveReason,
@@ -15,6 +19,26 @@ import type {
 type RouteCollection =
   | Record<string, TechnicianRoute>
   | TechnicianRoute[];
+
+type DispatcherTechnician = {
+  id: string;
+  name: string;
+};
+
+export type DispatcherPlanningContext = {
+  events: PlannerEventWithDate[];
+  technicians: DispatcherTechnician[];
+};
+
+type TargetProfile = {
+  technicianName: string;
+  date: string;
+  jobCount: number;
+  totalServiceMinutes: number;
+  totalDriveMinutes: number;
+  totalWorkMinutes: number;
+  route: TechnicianRoute | null;
+};
 
 type ResolvedDispatcherOptions = {
   maxCandidates: number;
@@ -263,6 +287,365 @@ function estimateBestInsertionDistance(
     : null;
 }
 
+function parseTimeToMinutes(
+  value: string | null | undefined,
+) {
+  if (!value) {
+    return null;
+  }
+
+  const match = value.match(
+    /^(\d{1,2}):(\d{2})/,
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+
+  if (
+    !Number.isFinite(hours) ||
+    !Number.isFinite(minutes)
+  ) {
+    return null;
+  }
+
+  return hours * 60 + minutes;
+}
+
+function getEventServiceMinutes(
+  event: PlannerEventWithDate,
+) {
+  const start =
+    parseTimeToMinutes(
+      event.startTime,
+    );
+
+  const end =
+    parseTimeToMinutes(
+      event.endTime,
+    );
+
+  if (
+    start === null ||
+    end === null
+  ) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    end - start,
+  );
+}
+
+function buildTargetProfiles({
+  routes,
+  context,
+}: {
+  routes: TechnicianRoute[];
+  context?: DispatcherPlanningContext;
+}) {
+  const profiles =
+    new Map<string, TargetProfile>();
+
+  for (const route of routes) {
+    profiles.set(
+      route.technicianName,
+      {
+        technicianName:
+          route.technicianName,
+        date: route.date,
+        jobCount:
+          route.summary.jobCount,
+        totalServiceMinutes:
+          route.summary
+            .totalServiceMinutes,
+        totalDriveMinutes:
+          route.summary
+            .totalDriveMinutes,
+        totalWorkMinutes:
+          route.summary
+            .totalWorkMinutes,
+        route,
+      },
+    );
+  }
+
+  if (!context) {
+    return profiles;
+  }
+
+  const fallbackDate =
+    routes[0]?.date ?? "";
+
+  const technicianNames =
+    new Set<string>();
+
+  for (
+    const technician of
+    context.technicians
+  ) {
+    const name =
+      technician.name.trim();
+
+    if (name) {
+      technicianNames.add(name);
+    }
+  }
+
+  for (const event of context.events) {
+    const name =
+      event.technician?.trim();
+
+    if (name) {
+      technicianNames.add(name);
+    }
+  }
+
+  for (const name of technicianNames) {
+    if (profiles.has(name)) {
+      continue;
+    }
+
+    const events =
+      context.events.filter(
+        (event) =>
+          event.technician?.trim() ===
+            name &&
+          (!fallbackDate ||
+            event.date ===
+              fallbackDate),
+      );
+
+    if (events.length === 0) {
+      continue;
+    }
+
+    const serviceMinutes =
+      events.reduce(
+        (total, event) =>
+          total +
+          getEventServiceMinutes(
+            event,
+          ),
+        0,
+      );
+
+    profiles.set(name, {
+      technicianName: name,
+      date:
+        events[0]?.date ??
+        fallbackDate,
+      jobCount: events.length,
+      totalServiceMinutes:
+        serviceMinutes,
+      totalDriveMinutes: 0,
+      totalWorkMinutes:
+        serviceMinutes,
+      route: null,
+    });
+  }
+
+  return profiles;
+}
+
+function createPlannerOnlyTargetCandidate({
+  sourceRoute,
+  target,
+  stop,
+  metersPerMinute,
+  options,
+}: {
+  sourceRoute: TechnicianRoute;
+  target: TargetProfile;
+  stop: RouteStop & {
+    workOrderId: number;
+    coordinate: RouteCoordinate;
+  };
+  metersPerMinute: number;
+  options: ResolvedDispatcherOptions;
+}): DispatcherMoveCandidate | null {
+  if (
+    sourceRoute.technicianName ===
+      target.technicianName ||
+    sourceRoute.date !== target.date
+  ) {
+    return null;
+  }
+
+  const removalDistance =
+    estimateRemovalDistance(
+      sourceRoute,
+      stop,
+    );
+
+  const sourceDriveSaved =
+    removalDistance /
+    metersPerMinute;
+
+  const serviceMinutes =
+    Math.max(
+      0,
+      stop.serviceDurationMinutes ??
+        0,
+    );
+
+  const sourceBefore =
+    sourceRoute.summary
+      .totalWorkMinutes;
+
+  const targetBefore =
+    target.totalWorkMinutes;
+
+  const sourceAfter =
+    Math.max(
+      0,
+      sourceBefore -
+        serviceMinutes -
+        sourceDriveSaved,
+    );
+
+  /*
+   * Målteknikern saknar Route Engine-baslinje.
+   * Vi lägger därför INTE in en påhittad
+   * körtids-/distansvinst. Den verkliga
+   * effekten ska verifieras med Google Routes
+   * efter att jobbet simulerats hos målet.
+   */
+  const targetAfter =
+    Math.max(
+      0,
+      targetBefore +
+        serviceMinutes,
+    );
+
+  const workloadBefore =
+    Math.abs(
+      sourceBefore -
+        targetBefore,
+    );
+
+  const workloadAfter =
+    Math.abs(
+      sourceAfter -
+        targetAfter,
+    );
+
+  const workloadImprovement =
+    Math.round(
+      workloadBefore -
+        workloadAfter,
+    );
+
+  if (workloadImprovement <= 0) {
+    return null;
+  }
+
+  const warnings = [
+    "Målteknikern saknar en befintlig Route Engine-rutt. Körtid och distans måste verifieras med Google Routes innan förslaget kan tillämpas.",
+  ];
+
+  if (
+    targetAfter >
+    options.maxTargetWorkMinutes
+  ) {
+    warnings.push(
+      `Målteknikern uppskattas få ${Math.round(
+        targetAfter,
+      )} min total arbetstid.`,
+    );
+  }
+
+  const status =
+    targetAfter >
+    options.maxTargetWorkMinutes
+      ? "blocked"
+      : "candidate";
+
+  const score =
+    workloadImprovement *
+    options.workloadBalanceWeight;
+
+  return {
+    id:
+      `${stop.workOrderId}:${sourceRoute.technicianName}->${target.technicianName}`,
+    workOrderId:
+      stop.workOrderId,
+    bookingId:
+      stop.bookingId ?? null,
+    sourceTechnician:
+      sourceRoute.technicianName,
+    targetTechnician:
+      target.technicianName,
+    stop,
+    reason:
+      "balance_workload",
+    status,
+    estimatedDriveMinutesSaved:
+      0,
+    estimatedDistanceMetersSaved:
+      0,
+    sourceImpact: impact({
+      technicianName:
+        sourceRoute.technicianName,
+      beforeWorkMinutes:
+        Math.round(sourceBefore),
+      estimatedAfterWorkMinutes:
+        Math.round(sourceAfter),
+      beforeDriveMinutes:
+        Math.round(
+          sourceRoute.summary
+            .totalDriveMinutes,
+        ),
+      estimatedAfterDriveMinutes:
+        Math.round(
+          Math.max(
+            0,
+            sourceRoute.summary
+              .totalDriveMinutes -
+              sourceDriveSaved,
+          ),
+        ),
+      beforeJobCount:
+        sourceRoute.summary.jobCount,
+      estimatedAfterJobCount:
+        Math.max(
+          0,
+          sourceRoute.summary
+            .jobCount - 1,
+        ),
+    }),
+    targetImpact: impact({
+      technicianName:
+        target.technicianName,
+      beforeWorkMinutes:
+        Math.round(targetBefore),
+      estimatedAfterWorkMinutes:
+        Math.round(targetAfter),
+      beforeDriveMinutes:
+        Math.round(
+          target.totalDriveMinutes,
+        ),
+      estimatedAfterDriveMinutes:
+        Math.round(
+          target.totalDriveMinutes,
+        ),
+      beforeJobCount:
+        target.jobCount,
+      estimatedAfterJobCount:
+        target.jobCount + 1,
+    }),
+    score:
+      Number(
+        score.toFixed(2),
+      ),
+    warnings,
+  };
+}
+
 function impact(
   value: DispatcherTechnicianImpact,
 ): DispatcherTechnicianImpact {
@@ -504,6 +887,7 @@ function createCandidate({
 
 export function analyzeDispatcher(
   routes: RouteCollection,
+  context?: DispatcherPlanningContext,
   options?: DispatcherOptions,
 ): DispatcherAnalysis {
   const routeList =
@@ -516,6 +900,12 @@ export function analyzeDispatcher(
     estimateAverageMetersPerMinute(
       routeList,
     );
+
+  const targetProfiles =
+    buildTargetProfiles({
+      routes: routeList,
+      context,
+    });
 
   const candidates:
     DispatcherMoveCandidate[] = [];
@@ -530,9 +920,12 @@ export function analyzeDispatcher(
     jobCount += jobs.length;
 
     for (const stop of jobs) {
-      for (const targetRoute of routeList) {
+      for (
+        const target of
+        targetProfiles.values()
+      ) {
         if (
-          targetRoute.technicianName ===
+          target.technicianName ===
           sourceRoute.technicianName
         ) {
           continue;
@@ -541,14 +934,24 @@ export function analyzeDispatcher(
         candidatesEvaluated += 1;
 
         const candidate =
-          createCandidate({
-            sourceRoute,
-            targetRoute,
-            stop,
-            metersPerMinute,
-            options:
-              resolvedOptions,
-          });
+          target.route
+            ? createCandidate({
+                sourceRoute,
+                targetRoute:
+                  target.route,
+                stop,
+                metersPerMinute,
+                options:
+                  resolvedOptions,
+              })
+            : createPlannerOnlyTargetCandidate({
+                sourceRoute,
+                target,
+                stop,
+                metersPerMinute,
+                options:
+                  resolvedOptions,
+              });
 
         if (candidate) {
           candidates.push(candidate);
@@ -586,7 +989,7 @@ export function analyzeDispatcher(
     generatedAt:
       new Date().toISOString(),
     technicianCount:
-      routeList.length,
+      targetProfiles.size,
     jobCount,
     candidatesEvaluated,
     candidates:

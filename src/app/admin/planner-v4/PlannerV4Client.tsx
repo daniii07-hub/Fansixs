@@ -650,6 +650,8 @@ export default function PlannerV4Client({
         successfulRoutes.length > 0 && (
           <PlannerAIDispatcherPanel
             routes={routes}
+            events={selectedDayEvents}
+            technicians={technicians}
             onJobSelect={
               setSelectedJobId
             }

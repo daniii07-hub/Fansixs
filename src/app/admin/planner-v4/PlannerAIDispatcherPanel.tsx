@@ -25,6 +25,9 @@ import type {
   RouteStop,
   TechnicianRoute,
 } from "./routing";
+import type {
+  PlannerEventWithDate,
+} from "../planner/queries";
 import {
   analyzeDispatcher,
 } from "./dispatcher/analyzeDispatcher";
@@ -54,10 +57,17 @@ type DispatcherInsight = {
   workOrderId?: number | null;
 };
 
+type Technician = {
+  id: string;
+  name: string;
+};
+
 type Props = {
   routes:
     | Record<string, TechnicianRoute>
     | TechnicianRoute[];
+  events: PlannerEventWithDate[];
+  technicians: Technician[];
   onJobSelect?: (
     workOrderId: number,
   ) => void;
@@ -395,6 +405,8 @@ function InsightIcon({
 
 export default function PlannerAIDispatcherPanel({
   routes,
+  events,
+  technicians,
   onJobSelect,
 }: Props) {
   const routeList =
@@ -421,12 +433,20 @@ export default function PlannerAIDispatcherPanel({
         analyzeDispatcher(
           routeList,
           {
+            events,
+            technicians,
+          },
+          {
             maxCandidates: 8,
             maxTargetWorkMinutes: 480,
             minimumEstimatedDriveMinutesSaved: 0,
           },
         ),
-      [routeList],
+      [
+        events,
+        routeList,
+        technicians,
+      ],
     );
 
   const dispatcherCandidates =
@@ -972,7 +992,7 @@ export default function PlannerAIDispatcherPanel({
       <div className="grid gap-3 border-t border-white/[0.07] bg-[#10182b] px-5 py-4 text-xs text-slate-500 sm:grid-cols-3">
         <span className="flex items-center gap-2">
           <Route className="h-4 w-4" />
-          {routeList.length} tekniker analyserade
+          {dispatcherAnalysis.technicianCount} tekniker analyserade
         </span>
 
         <span className="flex items-center gap-2">
