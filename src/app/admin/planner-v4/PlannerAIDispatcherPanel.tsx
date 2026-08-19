@@ -475,7 +475,7 @@ export default function PlannerAIDispatcherPanel({
         bestDispatcherCandidate ??
         null,
       [
-        selectedDispatcherCandidate,
+        bestDispatcherCandidate,
         dispatcherCandidates,
         selectedCandidateId,
       ],
@@ -567,7 +567,7 @@ export default function PlannerAIDispatcherPanel({
           const result =
             await verifyDispatcherCandidateAction({
               candidate:
-                bestDispatcherCandidate,
+                selectedDispatcherCandidate,
               sourceRoute,
               targetRoute:
                 targetRoute ?? null,
