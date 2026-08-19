@@ -3,6 +3,7 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   useTransition,
 } from "react";
@@ -499,7 +500,12 @@ export default function PlannerAIDispatcherPanel({
     setIsPreviewOpen,
   ] = useState(false);
 
+  const verificationRequestIdRef =
+    useRef(0);
+
   useEffect(() => {
+    verificationRequestIdRef.current += 1;
+
     setVerificationResult(
       null,
     );
@@ -562,6 +568,12 @@ export default function PlannerAIDispatcherPanel({
         return;
       }
 
+      const verificationRequestId =
+        verificationRequestIdRef.current + 1;
+
+      verificationRequestIdRef.current =
+        verificationRequestId;
+
       startVerification(
         async () => {
           const result =
@@ -573,6 +585,13 @@ export default function PlannerAIDispatcherPanel({
                 targetRoute ?? null,
               events,
             });
+
+          if (
+            verificationRequestId !==
+            verificationRequestIdRef.current
+          ) {
+            return;
+          }
 
           setVerificationResult(
             result,
@@ -931,6 +950,8 @@ export default function PlannerAIDispatcherPanel({
                   key={candidate.id}
                   type="button"
                   onClick={() => {
+                    verificationRequestIdRef.current += 1;
+
                     setSelectedCandidateId(
                       candidate.id,
                     );
