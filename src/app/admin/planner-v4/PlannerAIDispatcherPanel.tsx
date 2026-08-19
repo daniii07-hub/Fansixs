@@ -460,6 +460,28 @@ export default function PlannerAIDispatcherPanel({
     dispatcherAnalysis.bestCandidate;
 
   const [
+    selectedCandidateId,
+    setSelectedCandidateId,
+  ] = useState<string | null>(null);
+
+  const selectedDispatcherCandidate =
+    useMemo(
+      () =>
+        dispatcherCandidates.find(
+          (candidate) =>
+            candidate.id ===
+            selectedCandidateId,
+        ) ??
+        bestDispatcherCandidate ??
+        null,
+      [
+        selectedDispatcherCandidate,
+        dispatcherCandidates,
+        selectedCandidateId,
+      ],
+    );
+
+  const [
     verificationResult,
     setVerificationResult,
   ] =
@@ -486,13 +508,31 @@ export default function PlannerAIDispatcherPanel({
       false,
     );
   }, [
-    bestDispatcherCandidate?.id,
+    selectedDispatcherCandidate?.id,
+  ]);
+
+  useEffect(() => {
+    if (
+      selectedCandidateId &&
+      !dispatcherCandidates.some(
+        (candidate) =>
+          candidate.id ===
+          selectedCandidateId,
+      )
+    ) {
+      setSelectedCandidateId(
+        null,
+      );
+    }
+  }, [
+    dispatcherCandidates,
+    selectedCandidateId,
   ]);
 
   const verifyBestCandidate =
     () => {
       if (
-        !bestDispatcherCandidate
+        !selectedDispatcherCandidate
       ) {
         return;
       }
@@ -501,14 +541,14 @@ export default function PlannerAIDispatcherPanel({
         routeList.find(
           (route) =>
             route.technicianName ===
-            bestDispatcherCandidate.sourceTechnician,
+            selectedDispatcherCandidate.sourceTechnician,
         );
 
       const targetRoute =
         routeList.find(
           (route) =>
             route.technicianName ===
-            bestDispatcherCandidate.targetTechnician,
+            selectedDispatcherCandidate.targetTechnician,
         );
 
       if (!sourceRoute) {
@@ -661,7 +701,7 @@ export default function PlannerAIDispatcherPanel({
           </div>
         </div>
 
-        {bestDispatcherCandidate ? (
+        {selectedDispatcherCandidate ? (
           <div className="mt-4 rounded-2xl border border-fuchsia-400/20 bg-fuchsia-400/[0.07] p-4">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <div className="min-w-0">
@@ -671,25 +711,25 @@ export default function PlannerAIDispatcherPanel({
                   </span>
 
                   <span className="text-xs font-semibold text-slate-500">
-                    Jobb #{bestDispatcherCandidate.workOrderId}
+                    Jobb #{selectedDispatcherCandidate.workOrderId}
                   </span>
                 </div>
 
                 <div className="mt-3 flex flex-wrap items-center gap-2 text-base font-semibold text-white">
                   <span>
-                    {bestDispatcherCandidate.sourceTechnician}
+                    {selectedDispatcherCandidate.sourceTechnician}
                   </span>
 
                   <ArrowRight className="h-4 w-4 text-fuchsia-300" />
 
                   <span>
-                    {bestDispatcherCandidate.targetTechnician}
+                    {selectedDispatcherCandidate.targetTechnician}
                   </span>
                 </div>
 
                 <p className="mt-2 text-sm text-slate-400">
                   {getDispatcherReasonLabel(
-                    bestDispatcherCandidate.reason,
+                    selectedDispatcherCandidate.reason,
                   )}
                 </p>
               </div>
@@ -702,7 +742,7 @@ export default function PlannerAIDispatcherPanel({
 
                   <p className="mt-1 font-semibold text-emerald-300">
                     {formatSignedMinutes(
-                      bestDispatcherCandidate.estimatedDriveMinutesSaved,
+                      selectedDispatcherCandidate.estimatedDriveMinutesSaved,
                     )}
                   </p>
                 </div>
@@ -714,7 +754,7 @@ export default function PlannerAIDispatcherPanel({
 
                   <p className="mt-1 font-semibold text-emerald-300">
                     {formatSignedDistance(
-                      bestDispatcherCandidate.estimatedDistanceMetersSaved,
+                      selectedDispatcherCandidate.estimatedDistanceMetersSaved,
                     )}
                   </p>
                 </div>
@@ -725,7 +765,7 @@ export default function PlannerAIDispatcherPanel({
                   </p>
 
                   <p className="mt-1 font-semibold text-white">
-                    {bestDispatcherCandidate.score.toFixed(1)}
+                    {selectedDispatcherCandidate.score.toFixed(1)}
                   </p>
                 </div>
               </div>
@@ -734,36 +774,36 @@ export default function PlannerAIDispatcherPanel({
             <div className="mt-4 grid gap-3 lg:grid-cols-2">
               <div className="rounded-xl border border-white/[0.07] bg-black/10 p-3">
                 <p className="text-xs font-semibold text-slate-300">
-                  {bestDispatcherCandidate.sourceTechnician}
+                  {selectedDispatcherCandidate.sourceTechnician}
                 </p>
 
                 <p className="mt-1 text-xs leading-5 text-slate-500">
-                  {bestDispatcherCandidate.sourceImpact.beforeJobCount} →{" "}
-                  {bestDispatcherCandidate.sourceImpact.estimatedAfterJobCount} jobb
+                  {selectedDispatcherCandidate.sourceImpact.beforeJobCount} →{" "}
+                  {selectedDispatcherCandidate.sourceImpact.estimatedAfterJobCount} jobb
                   {" · "}
-                  {bestDispatcherCandidate.sourceImpact.beforeWorkMinutes} →{" "}
-                  {bestDispatcherCandidate.sourceImpact.estimatedAfterWorkMinutes} min arbete
+                  {selectedDispatcherCandidate.sourceImpact.beforeWorkMinutes} →{" "}
+                  {selectedDispatcherCandidate.sourceImpact.estimatedAfterWorkMinutes} min arbete
                 </p>
               </div>
 
               <div className="rounded-xl border border-white/[0.07] bg-black/10 p-3">
                 <p className="text-xs font-semibold text-slate-300">
-                  {bestDispatcherCandidate.targetTechnician}
+                  {selectedDispatcherCandidate.targetTechnician}
                 </p>
 
                 <p className="mt-1 text-xs leading-5 text-slate-500">
-                  {bestDispatcherCandidate.targetImpact.beforeJobCount} →{" "}
-                  {bestDispatcherCandidate.targetImpact.estimatedAfterJobCount} jobb
+                  {selectedDispatcherCandidate.targetImpact.beforeJobCount} →{" "}
+                  {selectedDispatcherCandidate.targetImpact.estimatedAfterJobCount} jobb
                   {" · "}
-                  {bestDispatcherCandidate.targetImpact.beforeWorkMinutes} →{" "}
-                  {bestDispatcherCandidate.targetImpact.estimatedAfterWorkMinutes} min arbete
+                  {selectedDispatcherCandidate.targetImpact.beforeWorkMinutes} →{" "}
+                  {selectedDispatcherCandidate.targetImpact.estimatedAfterWorkMinutes} min arbete
                 </p>
               </div>
             </div>
 
-            {bestDispatcherCandidate.warnings.length > 0 && (
+            {selectedDispatcherCandidate.warnings.length > 0 && (
               <div className="mt-3 rounded-xl border border-amber-400/15 bg-amber-400/[0.05] px-3 py-2 text-xs leading-5 text-amber-200/80">
-                {bestDispatcherCandidate.warnings.join(" ")}
+                {selectedDispatcherCandidate.warnings.join(" ")}
               </div>
             )}
 
@@ -790,12 +830,12 @@ export default function PlannerAIDispatcherPanel({
                   type="button"
                   onClick={() =>
                     onJobSelect(
-                      bestDispatcherCandidate.workOrderId,
+                      selectedDispatcherCandidate.workOrderId,
                     )
                   }
                   className="inline-flex items-center gap-2 text-sm font-semibold text-fuchsia-300 transition hover:text-fuchsia-200"
                 >
-                  Visa jobb #{bestDispatcherCandidate.workOrderId}
+                  Visa jobb #{selectedDispatcherCandidate.workOrderId}
                   <ChevronRight className="h-4 w-4" />
                 </button>
               )}
@@ -883,23 +923,31 @@ export default function PlannerAIDispatcherPanel({
               .filter(
                 (candidate) =>
                   candidate.id !==
-                  bestDispatcherCandidate?.id,
+                  selectedDispatcherCandidate?.id,
               )
               .slice(0, 4)
               .map((candidate) => (
                 <button
                   key={candidate.id}
                   type="button"
-                  onClick={() =>
-                    onJobSelect?.(
-                      candidate.workOrderId,
-                    )
-                  }
+                  onClick={() => {
+                    setSelectedCandidateId(
+                      candidate.id,
+                    );
+
+                    setVerificationResult(
+                      null,
+                    );
+
+                    setIsPreviewOpen(
+                      false,
+                    );
+                  }}
                   className="flex items-center justify-between gap-3 rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-3 text-left transition hover:bg-white/[0.045]"
                 >
                   <div className="min-w-0">
                     <p className="truncate text-xs font-semibold text-slate-300">
-                      Jobb #{candidate.workOrderId}
+                      Välj Jobb #{candidate.workOrderId}
                     </p>
 
                     <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-500">
