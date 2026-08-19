@@ -450,6 +450,346 @@ function buildTargetProfiles({
   return profiles;
 }
 
+
+type ScheduledEvent = {
+  id: number;
+  startMinutes: number;
+  endMinutes: number;
+  event: PlannerEventWithDate;
+};
+
+function getScheduledEventsForTechnician({
+  context,
+  technicianName,
+  date,
+  excludedWorkOrderId,
+}: {
+  context?: DispatcherPlanningContext;
+  technicianName: string;
+  date: string;
+  excludedWorkOrderId?: number;
+}): ScheduledEvent[] {
+  if (!context) {
+    return [];
+  }
+
+  return context.events
+    .filter(
+      (event) =>
+        event.date === date &&
+        event.technician?.trim() ===
+          technicianName &&
+        event.id !== excludedWorkOrderId,
+    )
+    .map((event) => {
+      const startMinutes =
+        parseTimeToMinutes(event.startTime);
+      const endMinutes =
+        parseTimeToMinutes(event.endTime);
+
+      if (
+        startMinutes === null ||
+        endMinutes === null ||
+        endMinutes <= startMinutes
+      ) {
+        return null;
+      }
+
+      return {
+        id: event.id,
+        startMinutes,
+        endMinutes,
+        event,
+      };
+    })
+    .filter(
+      (
+        value,
+      ): value is ScheduledEvent =>
+        value !== null,
+    )
+    .sort(
+      (a, b) =>
+        a.startMinutes -
+        b.startMinutes,
+    );
+}
+
+function getEventForWorkOrder({
+  context,
+  workOrderId,
+  date,
+}: {
+  context?: DispatcherPlanningContext;
+  workOrderId: number;
+  date: string;
+}) {
+  if (!context) {
+    return null;
+  }
+
+  return (
+    context.events.find(
+      (event) =>
+        event.id === workOrderId &&
+        event.date === date,
+    ) ?? null
+  );
+}
+
+function getRouteStopByWorkOrderId(
+  route: TechnicianRoute | null,
+  workOrderId: number,
+) {
+  if (!route) {
+    return null;
+  }
+
+  return (
+    route.stops.find(
+      (stop) =>
+        stop.type === "job" &&
+        stop.workOrderId === workOrderId,
+    ) ?? null
+  );
+}
+
+function estimateTravelMinutesBetweenStops({
+  from,
+  to,
+  metersPerMinute,
+}: {
+  from: RouteStop | null;
+  to: RouteStop | null;
+  metersPerMinute: number;
+}) {
+  if (
+    !from ||
+    !to ||
+    !isCoordinate(from.coordinate) ||
+    !isCoordinate(to.coordinate) ||
+    !Number.isFinite(metersPerMinute) ||
+    metersPerMinute <= 0
+  ) {
+    return null;
+  }
+
+  return Math.ceil(
+    haversineDistanceMeters(
+      from.coordinate,
+      to.coordinate,
+    ) / metersPerMinute,
+  );
+}
+
+function applyScheduleSafety({
+  candidate,
+  sourceRoute,
+  target,
+  context,
+  metersPerMinute,
+}: {
+  candidate: DispatcherMoveCandidate;
+  sourceRoute: TechnicianRoute;
+  target: TargetProfile;
+  context?: DispatcherPlanningContext;
+  metersPerMinute: number;
+}): DispatcherMoveCandidate {
+  if (!context) {
+    return candidate;
+  }
+
+  const movedEvent =
+    getEventForWorkOrder({
+      context,
+      workOrderId:
+        candidate.workOrderId,
+      date: sourceRoute.date,
+    });
+
+  const movedStart =
+    parseTimeToMinutes(
+      movedEvent?.startTime,
+    );
+
+  const movedEnd =
+    parseTimeToMinutes(
+      movedEvent?.endTime,
+    );
+
+  if (
+    !movedEvent ||
+    movedStart === null ||
+    movedEnd === null ||
+    movedEnd <= movedStart
+  ) {
+    return {
+      ...candidate,
+      status: "blocked",
+      warnings: [
+        ...candidate.warnings,
+        "Jobbet saknar en giltig bokad start- och sluttid. Dispatcher blockerar flytten tills tiden kan verifieras.",
+      ],
+    };
+  }
+
+  const targetEvents =
+    getScheduledEventsForTechnician({
+      context,
+      technicianName:
+        target.technicianName,
+      date: sourceRoute.date,
+      excludedWorkOrderId:
+        candidate.workOrderId,
+    });
+
+  const overlappingEvent =
+    targetEvents.find(
+      (scheduled) =>
+        movedStart <
+          scheduled.endMinutes &&
+        movedEnd >
+          scheduled.startMinutes,
+    );
+
+  if (overlappingEvent) {
+    return {
+      ...candidate,
+      status: "blocked",
+      warnings: [
+        ...candidate.warnings,
+        `Tidskrock: ${target.technicianName} har redan Jobb #${overlappingEvent.id} under den bokade tiden.`,
+      ],
+    };
+  }
+
+  const previousEvent =
+    [...targetEvents]
+      .reverse()
+      .find(
+        (scheduled) =>
+          scheduled.endMinutes <=
+          movedStart,
+      ) ?? null;
+
+  const nextEvent =
+    targetEvents.find(
+      (scheduled) =>
+        scheduled.startMinutes >=
+        movedEnd,
+    ) ?? null;
+
+  const movedStop =
+    candidate.stop;
+
+  let couldVerifyTravel = false;
+  const travelWarnings: string[] =
+    [];
+
+  if (previousEvent) {
+    const previousStop =
+      getRouteStopByWorkOrderId(
+        target.route,
+        previousEvent.id,
+      );
+
+    const travelMinutes =
+      estimateTravelMinutesBetweenStops({
+        from: previousStop,
+        to: movedStop,
+        metersPerMinute,
+      });
+
+    if (travelMinutes !== null) {
+      couldVerifyTravel = true;
+
+      const availableMinutes =
+        movedStart -
+        previousEvent.endMinutes;
+
+      if (
+        travelMinutes >
+        availableMinutes
+      ) {
+        return {
+          ...candidate,
+          status: "blocked",
+          warnings: [
+            ...candidate.warnings,
+            `Otillräcklig restid före jobbet: cirka ${travelMinutes} min behövs men endast ${availableMinutes} min finns mellan bokningarna.`,
+          ],
+        };
+      }
+    } else {
+      travelWarnings.push(
+        "Restiden från föregående jobb kunde inte verifieras lokalt och måste kontrolleras med Google Routes.",
+      );
+    }
+  }
+
+  if (nextEvent) {
+    const nextStop =
+      getRouteStopByWorkOrderId(
+        target.route,
+        nextEvent.id,
+      );
+
+    const travelMinutes =
+      estimateTravelMinutesBetweenStops({
+        from: movedStop,
+        to: nextStop,
+        metersPerMinute,
+      });
+
+    if (travelMinutes !== null) {
+      couldVerifyTravel = true;
+
+      const availableMinutes =
+        nextEvent.startMinutes -
+        movedEnd;
+
+      if (
+        travelMinutes >
+        availableMinutes
+      ) {
+        return {
+          ...candidate,
+          status: "blocked",
+          warnings: [
+            ...candidate.warnings,
+            `Otillräcklig restid efter jobbet: cirka ${travelMinutes} min behövs men endast ${availableMinutes} min finns till nästa bokning.`,
+          ],
+        };
+      }
+    } else {
+      travelWarnings.push(
+        "Restiden till nästa jobb kunde inte verifieras lokalt och måste kontrolleras med Google Routes.",
+      );
+    }
+  }
+
+  if (
+    (previousEvent || nextEvent) &&
+    !couldVerifyTravel
+  ) {
+    return {
+      ...candidate,
+      warnings: [
+        ...candidate.warnings,
+        ...travelWarnings,
+      ],
+    };
+  }
+
+  return {
+    ...candidate,
+    warnings: [
+      ...candidate.warnings,
+      ...travelWarnings,
+    ],
+  };
+}
+
 function createPlannerOnlyTargetCandidate({
   sourceRoute,
   target,
@@ -966,7 +1306,15 @@ export function analyzeDispatcher(
               });
 
         if (candidate) {
-          candidates.push(candidate);
+          candidates.push(
+            applyScheduleSafety({
+              candidate,
+              sourceRoute,
+              target,
+              context,
+              metersPerMinute,
+            }),
+          );
         }
       }
     }
