@@ -511,15 +511,12 @@ export default function PlannerAIDispatcherPanel({
             bestDispatcherCandidate.targetTechnician,
         );
 
-      if (
-        !sourceRoute ||
-        !targetRoute
-      ) {
+      if (!sourceRoute) {
         setVerificationResult({
           success: false,
           code: "INVALID_INPUT",
           message:
-            "Käll- eller målteknikerns rutt kunde inte hittas.",
+            "Källteknikerns rutt kunde inte hittas.",
         });
 
         return;
@@ -532,7 +529,9 @@ export default function PlannerAIDispatcherPanel({
               candidate:
                 bestDispatcherCandidate,
               sourceRoute,
-              targetRoute,
+              targetRoute:
+                targetRoute ?? null,
+              events,
             });
 
           setVerificationResult(

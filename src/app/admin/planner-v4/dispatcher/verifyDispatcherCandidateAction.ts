@@ -4,6 +4,14 @@ import type {
   DispatcherMoveCandidate,
 } from "./types";
 
+import type {
+  PlannerEventWithDate,
+} from "../../planner/queries";
+
+import {
+  buildRouteRequest,
+} from "../routing/buildRouteRequest";
+
 import {
   calculateTechnicianRoute,
 } from "../routing/routeEngine";
@@ -116,8 +124,11 @@ export type VerifyDispatcherCandidateInput = {
   sourceRoute:
     TechnicianRoute;
 
-  targetRoute:
-    TechnicianRoute;
+  targetRoute?:
+    TechnicianRoute | null;
+
+  events:
+    PlannerEventWithDate[];
 
   departureTime?: string | null;
 };
@@ -278,6 +289,115 @@ function buildRequest({
   };
 }
 
+function buildPlannerBaselineRoute({
+  technicianName,
+  date,
+  events,
+}: {
+  technicianName: string;
+  date: string;
+  events: PlannerEventWithDate[];
+}): TechnicianRoute {
+  const request =
+    buildRouteRequest({
+      technician:
+        technicianName,
+      date,
+      events,
+    });
+
+  const totalServiceMinutes =
+    request.stops.reduce(
+      (total, stop) =>
+        total +
+        (stop.serviceDurationMinutes ??
+          0),
+      0,
+    );
+
+  return {
+    technicianId:
+      request.technicianId,
+    technicianName:
+      request.technicianName,
+    date:
+      request.date,
+    travelMode:
+      request.travelMode ??
+      "DRIVE",
+    trafficPreference:
+      request.trafficPreference ??
+      "TRAFFIC_AWARE",
+    stops:
+      request.stops.map(cloneStop),
+    legs: [],
+    warnings: [
+      "Baslinjen saknar en tidigare Route Engine-rutt.",
+    ],
+    summary: {
+      totalDistanceMeters: 0,
+      totalDurationSeconds: 0,
+      totalStaticDurationSeconds:
+        0,
+      totalServiceMinutes,
+      totalDriveMinutes: 0,
+      totalWorkMinutes:
+        totalServiceMinutes,
+      stopCount:
+        request.stops.length,
+      jobCount:
+        request.stops.filter(
+          (stop) =>
+            stop.type === "job",
+        ).length,
+    },
+  };
+}
+
+function buildPlannerTargetRequest({
+  candidate,
+  sourceRoute,
+  events,
+  departureTime,
+}: {
+  candidate:
+    DispatcherMoveCandidate;
+  sourceRoute:
+    TechnicianRoute;
+  events:
+    PlannerEventWithDate[];
+  departureTime?: string | null;
+}): RouteEngineRequest {
+  const simulatedEvents =
+    events.map((event) =>
+      event.id ===
+      candidate.workOrderId
+        ? {
+            ...event,
+            technician:
+              candidate.targetTechnician,
+          }
+        : event,
+    );
+
+  const request =
+    buildRouteRequest({
+      technician:
+        candidate.targetTechnician,
+      date:
+        sourceRoute.date,
+      events:
+        simulatedEvents,
+    });
+
+  return {
+    ...request,
+    optimizeWaypointOrder: true,
+    departureTime:
+      departureTime ?? null,
+  };
+}
+
 function buildImpact({
   before,
   after,
@@ -383,14 +503,15 @@ function getStatus({
 export async function verifyDispatcherCandidateAction({
   candidate,
   sourceRoute,
-  targetRoute,
+  targetRoute = null,
+  events,
   departureTime,
 }: VerifyDispatcherCandidateInput): Promise<DispatcherVerificationResult> {
   try {
     if (
       !candidate ||
       !sourceRoute ||
-      !targetRoute ||
+      !Array.isArray(events) ||
       candidate.workOrderId <=
         0
     ) {
@@ -417,8 +538,9 @@ export async function verifyDispatcherCandidateAction({
     }
 
     if (
+      targetRoute &&
       targetRoute.technicianName !==
-      candidate.targetTechnician
+        candidate.targetTechnician
     ) {
       return {
         success: false,
@@ -430,8 +552,9 @@ export async function verifyDispatcherCandidateAction({
     }
 
     if (
+      targetRoute &&
       sourceRoute.date !==
-      targetRoute.date
+        targetRoute.date
     ) {
       return {
         success: false,
@@ -478,21 +601,48 @@ export async function verifyDispatcherCandidateAction({
       };
     }
 
-    const targetStops =
-      buildTargetStops({
-        targetRoute,
-        movedStop,
+    const targetBeforeRoute =
+      targetRoute ??
+      buildPlannerBaselineRoute({
+        technicianName:
+          candidate.targetTechnician,
+        date:
+          sourceRoute.date,
+        events,
       });
 
+    const targetRequest =
+      targetRoute
+        ? buildRequest({
+            route:
+              targetRoute,
+            stops:
+              buildTargetStops({
+                targetRoute,
+                movedStop,
+              }),
+            departureTime:
+              departureTime ??
+              null,
+          })
+        : buildPlannerTargetRequest({
+            candidate,
+            sourceRoute,
+            events,
+            departureTime:
+              departureTime ??
+              null,
+          });
+
     if (
-      targetStops.length < 2
+      targetRequest.stops.length < 2
     ) {
       return {
         success: false,
         code:
           "TARGET_ROUTE_INVALID",
         message:
-          "Mål-rutten innehåller för få stopp för verifiering.",
+          "Målteknikern får fortfarande för få jobb/stopp för att Google Routes ska kunna verifiera flytten.",
       };
     }
 
@@ -515,17 +665,7 @@ export async function verifyDispatcherCandidateAction({
       ),
 
       calculateTechnicianRoute(
-        buildRequest({
-          route:
-            targetRoute,
-
-          stops:
-            targetStops,
-
-          departureTime:
-            departureTime ??
-            null,
-        }),
+        targetRequest,
       ),
     ]);
 
@@ -575,7 +715,7 @@ export async function verifyDispatcherCandidateAction({
     const targetImpact =
       buildImpact({
         before:
-          targetRoute,
+          targetBeforeRoute,
 
         after:
           verifiedTargetRoute,
@@ -584,7 +724,7 @@ export async function verifyDispatcherCandidateAction({
     const totalBeforeDistanceMeters =
       sourceRoute.summary
         .totalDistanceMeters +
-      targetRoute.summary
+      targetBeforeRoute.summary
         .totalDistanceMeters;
 
     const totalAfterDistanceMeters =
@@ -600,7 +740,7 @@ export async function verifyDispatcherCandidateAction({
     const totalBeforeDriveMinutes =
       sourceRoute.summary
         .totalDriveMinutes +
-      targetRoute.summary
+      targetBeforeRoute.summary
         .totalDriveMinutes;
 
     const totalAfterDriveMinutes =
@@ -616,7 +756,7 @@ export async function verifyDispatcherCandidateAction({
     const totalBeforeWorkMinutes =
       sourceRoute.summary
         .totalWorkMinutes +
-      targetRoute.summary
+      targetBeforeRoute.summary
         .totalWorkMinutes;
 
     const totalAfterWorkMinutes =
