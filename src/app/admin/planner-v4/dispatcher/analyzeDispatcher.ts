@@ -174,13 +174,11 @@ function getJobStops(
       stop,
     ): stop is RouteStop & {
       workOrderId: number;
-      coordinate: RouteCoordinate;
     } =>
       stop.type === "job" &&
       typeof stop.workOrderId === "number" &&
       Number.isInteger(stop.workOrderId) &&
-      stop.workOrderId > 0 &&
-      isCoordinate(stop.coordinate),
+      stop.workOrderId > 0,
   );
 }
 
@@ -463,7 +461,6 @@ function createPlannerOnlyTargetCandidate({
   target: TargetProfile;
   stop: RouteStop & {
     workOrderId: number;
-    coordinate: RouteCoordinate;
   };
   metersPerMinute: number;
   options: ResolvedDispatcherOptions;
@@ -477,10 +474,16 @@ function createPlannerOnlyTargetCandidate({
   }
 
   const removalDistance =
-    estimateRemovalDistance(
-      sourceRoute,
-      stop,
-    );
+    isCoordinate(stop.coordinate)
+      ? estimateRemovalDistance(
+          sourceRoute,
+          {
+            ...stop,
+            coordinate:
+              stop.coordinate,
+          },
+        )
+      : 0;
 
   const sourceDriveSaved =
     removalDistance /
@@ -545,7 +548,9 @@ function createPlannerOnlyTargetCandidate({
   }
 
   const warnings = [
-    "Målteknikern saknar en befintlig Route Engine-rutt. Körtid och distans måste verifieras med Google Routes innan förslaget kan tillämpas.",
+    target.route
+      ? "Jobbet saknar lokala koordinater för en säker distansuppskattning. Körtid och distans måste verifieras med Google Routes innan förslaget kan tillämpas."
+      : "Målteknikern saknar en befintlig Route Engine-rutt. Körtid och distans måste verifieras med Google Routes innan förslaget kan tillämpas.",
   ];
 
   if (
@@ -934,12 +939,19 @@ export function analyzeDispatcher(
         candidatesEvaluated += 1;
 
         const candidate =
-          target.route
+          target.route &&
+          isCoordinate(
+            stop.coordinate,
+          )
             ? createCandidate({
                 sourceRoute,
                 targetRoute:
                   target.route,
-                stop,
+                stop: {
+                  ...stop,
+                  coordinate:
+                    stop.coordinate,
+                },
                 metersPerMinute,
                 options:
                   resolvedOptions,
