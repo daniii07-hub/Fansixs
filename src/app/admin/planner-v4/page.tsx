@@ -7,19 +7,12 @@ import {
   UsersRound,
 } from "lucide-react";
 
-import type {
-  PlannerEventWithDate,
-} from "../planner/queries";
 import {
   getPlannerData,
 } from "../planner/queries";
 import PlannerHeroActions from "./PlannerHeroActions";
-import PlannerRouteSummary from "./PlannerRouteSummary";
 import PlannerV4Client from "./PlannerV4Client";
 import OptimizationHistoryPanel from "./optimizer/OptimizationHistoryPanel";
-import {
-  getRoutesForTechnicians,
-} from "./routing/getTechnicianRoute";
 
 export const dynamic =
   "force-dynamic";
@@ -64,54 +57,6 @@ function getInitialPlannerDate(
   );
 }
 
-function getRoutableTechnicians({
-  date,
-  events,
-}: {
-  date: string;
-  events: PlannerEventWithDate[];
-}) {
-  const jobsPerTechnician =
-    new Map<string, number>();
-
-  for (const event of events) {
-    const eventDate =
-      String(
-        event.date ?? "",
-      ).slice(0, 10);
-
-    const technician =
-      event.technician?.trim();
-
-    if (
-      eventDate !== date ||
-      !technician ||
-      !event.city?.trim()
-    ) {
-      continue;
-    }
-
-    jobsPerTechnician.set(
-      technician,
-      (jobsPerTechnician.get(
-        technician,
-      ) ?? 0) + 1,
-    );
-  }
-
-  return Array.from(
-    jobsPerTechnician.entries(),
-  )
-    .filter(
-      ([, jobCount]) =>
-        jobCount >= 2,
-    )
-    .map(
-      ([technician]) =>
-        technician,
-    );
-}
-
 export default async function PlannerV4Page() {
   try {
     const plannerData =
@@ -122,68 +67,42 @@ export default async function PlannerV4Page() {
         plannerData.events,
       );
 
-    const routableTechnicians =
-      getRoutableTechnicians({
-        date: selectedDate,
-        events:
-          plannerData.events,
-      });
+    const routeInputTechnicians =
+      Array.from(
+        plannerData.events.reduce(
+          (counts, event) => {
+            const eventDate =
+              String(
+                event.date ?? "",
+              ).slice(0, 10);
 
-    const routeEvents =
-      plannerData.events.filter(
-        (event) =>
-          String(
-            event.date ?? "",
-          ).slice(0, 10) ===
-            selectedDate &&
-          Boolean(
-            event.city?.trim(),
-          ),
-      );
+            const technician =
+              event.technician?.trim();
 
-    const routeResults =
-      routableTechnicians.length >
-      0
-        ? await getRoutesForTechnicians(
-            {
-              technicians:
-                routableTechnicians,
-              date: selectedDate,
-              events: routeEvents,
-            },
-          )
-        : {};
+            if (
+              eventDate !==
+                selectedDate ||
+              !technician ||
+              !event.city?.trim()
+            ) {
+              return counts;
+            }
 
-    const successfulRoutes =
-      Object.values(routeResults)
-        .filter(
-          (result) =>
-            result.success,
-        )
-        .map(
-          (result) =>
-            result.route,
-        );
+            counts.set(
+              technician,
+              (counts.get(
+                technician,
+              ) ?? 0) + 1,
+            );
 
-    const routeErrors =
-      Object.entries(routeResults)
-        .filter(
-          ([, result]) =>
-            !result.success,
-        )
-        .map(
-          ([
-            technician,
-            result,
-          ]) => ({
-            technician,
-            message:
-              result.success
-                ? ""
-                : result.error
-                    .message,
-          }),
-        );
+            return counts;
+          },
+          new Map<string, number>(),
+        ),
+      ).filter(
+        ([, jobCount]) =>
+          jobCount >= 2,
+      ).length;
 
     return (
       <div className="space-y-6">
@@ -242,12 +161,12 @@ export default async function PlannerV4Page() {
             <Route className="h-5 w-5 text-amber-300" />
 
             <p className="mt-4 text-sm text-amber-100/70">
-              Beräknade rutter
+              Ruttunderlag
             </p>
 
             <p className="mt-2 text-3xl font-bold text-white">
               {
-                successfulRoutes.length
+                routeInputTechnicians
               }
             </p>
           </article>
@@ -283,77 +202,6 @@ export default async function PlannerV4Page() {
             </p>
           </article>
         </section>
-
-        {successfulRoutes.length >
-          0 && (
-          <section className="space-y-4">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-purple-300">
-                Google Routes
-              </p>
-
-              <h2 className="mt-2 text-2xl font-semibold text-white">
-                Ruttöversikt för
-                startdatumet
-              </h2>
-            </div>
-
-            <div className="grid gap-4 xl:grid-cols-2">
-              {successfulRoutes.map(
-                (route) => (
-                  <PlannerRouteSummary
-                    key={
-                      route.technicianId
-                    }
-                    route={route}
-                  />
-                ),
-              )}
-            </div>
-          </section>
-        )}
-
-        {routeErrors.length > 0 && (
-          <section className="rounded-3xl border border-amber-400/20 bg-amber-400/[0.06] p-5">
-            <p className="font-semibold text-amber-100">
-              Några rutter kunde
-              inte beräknas
-            </p>
-
-            <div className="mt-3 space-y-2 text-sm text-amber-100/70">
-              {routeErrors.map(
-                (routeError) => (
-                  <p
-                    key={
-                      routeError.technician
-                    }
-                  >
-                    <span className="font-semibold">
-                      {
-                        routeError.technician
-                      }
-                      :
-                    </span>{" "}
-                    {
-                      routeError.message
-                    }
-                  </p>
-                ),
-              )}
-            </div>
-          </section>
-        )}
-
-        {routableTechnicians.length ===
-          0 && (
-          <section className="rounded-3xl border border-white/10 bg-[#0b1020] p-5 text-sm text-slate-400">
-            Minst två jobb med
-            tekniker och ort behövs
-            på samma dag för att en
-            rutt ska kunna
-            beräknas.
-          </section>
-        )}
 
         <section
           id="planner-route-optimizer"
